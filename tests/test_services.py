@@ -221,3 +221,34 @@ def test_journal_remains_balanced_after_reversal(db, customer):
     total_dr = sum((r[0] for r in rows), Decimal("0"))
     total_cr = sum((r[1] for r in rows), Decimal("0"))
     assert total_dr == total_cr
+
+
+from app.services import list_journal
+
+
+def test_list_journal_returns_joined_rows(db, customer):
+    doc_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer,
+                           Decimal("100"), "A sale")
+    rows = list_journal(db)
+    assert len(rows) == 2
+    assert {r.account_code for r in rows} == {"1100", "4000"}
+    assert all(r.partner_name == "Acme Corp" for r in rows)
+    assert all(r.doc_id == doc_id for r in rows)
+    assert {r.account_name for r in rows} == {"Accounts Receivable", "Revenue"}
+
+
+def test_list_journal_date_filter(db, customer):
+    post_document(db, DocType.SALES_INVOICE, date(2026, 1, 15), customer,
+                  Decimal("10"), None)
+    post_document(db, DocType.SALES_INVOICE, date(2026, 3, 15), customer,
+                  Decimal("20"), None)
+    rows = list_journal(db, date_from=date(2026, 2, 1), date_to=date(2026, 2, 28))
+    assert rows == []
+    rows = list_journal(db, date_from=date(2026, 1, 1), date_to=date(2026, 1, 31))
+    assert all(r.doc_date == date(2026, 1, 15) for r in rows)
+
+
+def test_list_journal_account_filter(db, customer):
+    post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("10"), None)
+    rows = list_journal(db, accounts=["4000"])
+    assert {r.account_code for r in rows} == {"4000"}

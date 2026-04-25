@@ -118,3 +118,41 @@ def reverse_document(conn: sqlite3.Connection, document_id: int) -> int:
             conn.execute("ROLLBACK")
             raise
     return rev_id
+
+
+def list_journal(
+    conn: sqlite3.Connection,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    accounts: list[str] | None = None,
+) -> list[JournalRow]:
+    sql = """SELECT je.id, d.id, d.doc_type, d.doc_date, p.name,
+                    je.account_code, a.name, je.debit, je.credit,
+                    d.description, d.status
+             FROM journal_entries je
+             JOIN documents d ON d.id = je.document_id
+             JOIN partners p   ON p.id = d.partner_id
+             JOIN accounts a   ON a.code = je.account_code
+             WHERE 1=1"""
+    params: list = []
+    if date_from is not None:
+        sql += " AND d.doc_date >= ?"
+        params.append(date_from.isoformat())
+    if date_to is not None:
+        sql += " AND d.doc_date <= ?"
+        params.append(date_to.isoformat())
+    if accounts:
+        placeholders = ",".join("?" * len(accounts))
+        sql += f" AND je.account_code IN ({placeholders})"
+        params.extend(accounts)
+    sql += " ORDER BY d.doc_date, je.id"
+    return [
+        JournalRow(
+            entry_id=r[0], doc_id=r[1], doc_type=DocType(r[2]),
+            doc_date=date.fromisoformat(r[3]), partner_name=r[4],
+            account_code=r[5], account_name=r[6],
+            debit=r[7], credit=r[8],
+            description=r[9], status=DocStatus(r[10]),
+        )
+        for r in conn.execute(sql, params)
+    ]
