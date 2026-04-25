@@ -1,3 +1,13 @@
+import sys
+from pathlib import Path
+
+# Allow direct `python app/ui/main.py` runs (e.g. IDE "Run" button) by adding
+# the project root to sys.path. When launched via `streamlit run` from the
+# project root, sys.path already contains it and this is a no-op.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from datetime import date
 from decimal import Decimal
 import streamlit as st
