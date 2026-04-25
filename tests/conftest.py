@@ -16,3 +16,19 @@ def db():
     seed_accounts(conn)
     yield conn
     conn.close()
+
+
+@pytest.fixture
+def customer(db):
+    from app.services import create_partner
+    from app.models import PartnerKind
+    pid = create_partner(db, "Acme Corp", PartnerKind.CUSTOMER)
+    return pid
+
+
+@pytest.fixture
+def supplier(db):
+    from app.services import create_partner
+    from app.models import PartnerKind
+    pid = create_partner(db, "Office Ltd", PartnerKind.SUPPLIER)
+    return pid
