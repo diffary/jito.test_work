@@ -156,3 +156,45 @@ def list_journal(
         )
         for r in conn.execute(sql, params)
     ]
+
+
+def pnl_report(
+    conn: sqlite3.Connection,
+    date_from: date,
+    date_to: date,
+) -> PnLReport:
+    """P&L over a date range. No document-status filter — arithmetic cancellation
+    via reversal entries keeps reports correct. Aggregation in Python to preserve Decimal."""
+
+    def _side(account_code: str) -> tuple[Decimal, list[PnLDocRow]]:
+        # Revenue (4000): credit − debit positive. Expense (5000): debit − credit positive.
+        rows = conn.execute(
+            """SELECT d.id, d.doc_date, p.name, je.debit, je.credit, d.description
+               FROM journal_entries je
+               JOIN documents d ON d.id = je.document_id
+               JOIN partners p ON p.id = d.partner_id
+               WHERE je.account_code = ?
+                 AND d.doc_date BETWEEN ? AND ?
+               ORDER BY d.doc_date, d.id""",
+            (account_code, date_from.isoformat(), date_to.isoformat()),
+        ).fetchall()
+        doc_rows = [
+            PnLDocRow(
+                doc_id=r[0],
+                doc_date=date.fromisoformat(r[1]),
+                partner_name=r[2],
+                amount=(r[4] - r[3]) if account_code == "4000" else (r[3] - r[4]),
+                description=r[5],
+            )
+            for r in rows
+        ]
+        total = sum((x.amount for x in doc_rows), Decimal("0"))
+        return total, doc_rows
+
+    revenue, rev_rows = _side("4000")
+    expense, exp_rows = _side("5000")
+    return PnLReport(
+        date_from=date_from, date_to=date_to,
+        revenue=revenue, expense=expense,
+        revenue_rows=rev_rows, expense_rows=exp_rows,
+    )
