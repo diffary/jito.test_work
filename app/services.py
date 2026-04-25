@@ -198,3 +198,51 @@ def pnl_report(
         revenue=revenue, expense=expense,
         revenue_rows=rev_rows, expense_rows=exp_rows,
     )
+
+
+def partner_balances(conn: sqlite3.Connection) -> list[PartnerBalance]:
+    """For each partner, outstanding balance on 1100 (AR) or 2000 (AP).
+    No status filter — arithmetic via reversal entries handles cancellation.
+    Python-side aggregation to preserve Decimal."""
+    partners = repo.list_partners(conn)
+    result: list[PartnerBalance] = []
+    for p in partners:
+        target_account = "1100" if p.kind == PartnerKind.CUSTOMER else "2000"
+        rows = conn.execute(
+            """SELECT je.debit, je.credit, d.doc_date
+               FROM journal_entries je
+               JOIN documents d ON d.id = je.document_id
+               WHERE d.partner_id = ? AND je.account_code = ?""",
+            (p.id, target_account),
+        ).fetchall()
+        if p.kind == PartnerKind.CUSTOMER:
+            outstanding = sum((r[0] - r[1] for r in rows), Decimal("0"))
+        else:
+            outstanding = sum((r[1] - r[0] for r in rows), Decimal("0"))
+
+        # Exclude reversals from invoice_count (a reversed invoice + its reversal
+        # would otherwise count as 2). last_activity below intentionally counts
+        # reversals — users want to see the partner's most recent touch.
+        invoice_count_row = conn.execute(
+            """SELECT COUNT(*) FROM documents
+               WHERE partner_id = ?
+                 AND doc_type IN ('SALES_INVOICE','PURCHASE_INVOICE')
+                 AND reverses_id IS NULL
+                 AND status = 'POSTED'""",
+            (p.id,),
+        ).fetchone()
+        invoice_count = invoice_count_row[0]
+
+        last_row = conn.execute(
+            "SELECT MAX(doc_date) FROM documents WHERE partner_id = ?",
+            (p.id,),
+        ).fetchone()
+        last_activity = date.fromisoformat(last_row[0]) if last_row[0] else None
+
+        result.append(PartnerBalance(
+            partner_id=p.id, name=p.name, kind=p.kind,
+            outstanding=outstanding,
+            invoice_count=invoice_count,
+            last_activity=last_activity,
+        ))
+    return result

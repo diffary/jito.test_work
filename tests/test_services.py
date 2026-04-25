@@ -252,3 +252,44 @@ def test_list_journal_account_filter(db, customer):
     post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("10"), None)
     rows = list_journal(db, accounts=["4000"])
     assert {r.account_code for r in rows} == {"4000"}
+
+
+from app.services import partner_balances
+
+
+def test_customer_AR_decreases_after_payment(db, customer):
+    post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("100"), None)
+    post_document(db, DocType.CUSTOMER_PAYMENT, TODAY, customer, Decimal("30"), None)
+    balances = {b.partner_id: b for b in partner_balances(db)}
+    assert balances[customer].outstanding == Decimal("70")
+
+
+def test_supplier_AP_decreases_after_payment(db, supplier):
+    post_document(db, DocType.PURCHASE_INVOICE, TODAY, supplier, Decimal("100"), None)
+    post_document(db, DocType.SUPPLIER_PAYMENT, TODAY, supplier, Decimal("40"), None)
+    balances = {b.partner_id: b for b in partner_balances(db)}
+    assert balances[supplier].outstanding == Decimal("60")
+
+
+def test_overpayment_produces_negative_AR_balance(db, customer):
+    post_document(db, DocType.CUSTOMER_PAYMENT, TODAY, customer, Decimal("50"), None)
+    balances = {b.partner_id: b for b in partner_balances(db)}
+    assert balances[customer].outstanding == Decimal("-50")
+
+
+def test_invoice_and_reversal_net_to_zero_in_partner_balance(db, customer):
+    doc_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer,
+                           Decimal("100"), None)
+    reverse_document(db, doc_id)
+    balances = {b.partner_id: b for b in partner_balances(db)}
+    assert balances[customer].outstanding == Decimal("0")
+
+
+def test_invoice_count_excludes_reversals(db, customer):
+    """Original + reversal must not count as 2 invoices."""
+    d1 = post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("10"), None)
+    d2 = post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("20"), None)
+    reverse_document(db, d1)
+    balances = {b.partner_id: b for b in partner_balances(db)}
+    # Only the non-reversed invoice (d2) counts.
+    assert balances[customer].invoice_count == 1
