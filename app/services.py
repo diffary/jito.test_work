@@ -84,3 +84,37 @@ def post_document(
             conn.execute("ROLLBACK")
             raise
     return doc_id
+
+
+def reverse_document(conn: sqlite3.Connection, document_id: int) -> int:
+    original = repo.get_document(conn, document_id)
+    if original is None:
+        raise ValueError(f"Document id={document_id} not found")
+    if original.reverses_id is not None:
+        raise ValueError("Cannot reverse a reversal")
+    if original.status == DocStatus.REVERSED:
+        raise ValueError("Document is already reversed")
+
+    _, dr_acc, cr_acc = ACCOUNT_MAP[original.doc_type]
+
+    with _write_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rev_id = repo.insert_document(
+                conn,
+                doc_type=original.doc_type,
+                doc_date=date.today(),
+                partner_id=original.partner_id,
+                amount=original.amount,
+                description=f"Reversal of #{original.id}",
+                reverses_id=original.id,
+            )
+            # Swap Dr/Cr on the same accounts
+            repo.insert_journal_entry(conn, rev_id, cr_acc, original.amount, Decimal("0"))
+            repo.insert_journal_entry(conn, rev_id, dr_acc, Decimal("0"), original.amount)
+            repo.update_document_status(conn, original.id, DocStatus.REVERSED)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return rev_id

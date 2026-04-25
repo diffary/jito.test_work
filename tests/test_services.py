@@ -157,3 +157,67 @@ def _entries_for(db, doc_id):
 
 def _dr_cr(entries):
     return {e[0]: (e[1], e[2]) for e in entries}
+
+
+from app.services import reverse_document
+from app.models import DocStatus
+
+
+def test_reverse_sales_invoice_creates_mirrored_entries(db, customer):
+    original_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer,
+                                Decimal("100.00"), "Sale")
+    rev_id = reverse_document(db, original_id)
+
+    # Original flipped
+    (status,) = db.execute("SELECT status FROM documents WHERE id=?", (original_id,)).fetchone()
+    assert status == "REVERSED"
+
+    # Reversal entries: Dr 4000 / Cr 1100 (mirror of original Dr 1100 / Cr 4000)
+    rev_entries = _entries_for(db, rev_id)
+    assert _dr_cr(rev_entries) == {
+        "4000": (Decimal("100.00"), Decimal("0")),
+        "1100": (Decimal("0"), Decimal("100.00")),
+    }
+
+    # Reversal links to original
+    (reverses_id,) = db.execute("SELECT reverses_id FROM documents WHERE id=?", (rev_id,)).fetchone()
+    assert reverses_id == original_id
+
+
+def test_reversal_gets_today_as_doc_date(db, customer):
+    original_id = post_document(
+        db, DocType.SALES_INVOICE,
+        date(2026, 1, 15), customer, Decimal("10"), None,
+    )
+    rev_id = reverse_document(db, original_id)
+    (rev_date,) = db.execute("SELECT doc_date FROM documents WHERE id=?", (rev_id,)).fetchone()
+    assert rev_date == TODAY.isoformat()
+
+
+def test_cannot_reverse_already_reversed(db, customer):
+    doc_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("10"), None)
+    reverse_document(db, doc_id)
+    with pytest.raises(ValueError, match="already reversed"):
+        reverse_document(db, doc_id)
+
+
+def test_cannot_reverse_a_reversal(db, customer):
+    doc_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("10"), None)
+    rev_id = reverse_document(db, doc_id)
+    with pytest.raises(ValueError, match="reversal"):
+        reverse_document(db, rev_id)
+
+
+def test_cannot_reverse_nonexistent(db):
+    with pytest.raises(ValueError, match="not found"):
+        reverse_document(db, 99999)
+
+
+def test_journal_remains_balanced_after_reversal(db, customer):
+    post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("100"), None)
+    doc_id = post_document(db, DocType.SALES_INVOICE, TODAY, customer, Decimal("40"), None)
+    reverse_document(db, doc_id)
+    rows = db.execute("SELECT debit, credit FROM journal_entries").fetchall()
+    total_dr = sum((r[0] for r in rows), Decimal("0"))
+    total_cr = sum((r[1] for r in rows), Decimal("0"))
+    assert total_dr == total_cr
