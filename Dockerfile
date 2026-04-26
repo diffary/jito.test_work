@@ -10,6 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
 EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health').status==200 else 1)"
+# Server binds to 0.0.0.0 (all interfaces) so the host can reach it,
+# but the URL printed in the logs uses 'localhost' so users can click it directly.
 CMD ["streamlit", "run", "app/ui/main.py", \
      "--server.port=8501", "--server.address=0.0.0.0", \
-     "--server.headless=true", "--browser.gatherUsageStats=false"]
+     "--server.headless=true", "--browser.gatherUsageStats=false", \
+     "--browser.serverAddress=localhost", "--browser.serverPort=8501"]
