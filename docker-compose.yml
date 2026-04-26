@@ -4,5 +4,7 @@ services:
     ports: ["8501:8501"]
     volumes:
       - ./data:/app/data
-    env_file: .env
+    # No env_file: defaults (CURRENCY, DB_PATH) are baked into the Dockerfile.
+    # To override, copy .env.example to .env and uncomment the line below.
+    # env_file: .env
     restart: unless-stopped
