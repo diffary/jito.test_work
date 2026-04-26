@@ -220,6 +220,225 @@
 9. Partners — Acme outstanding AR $70 (было $120, минус $50 сторно).
 10. Reports — Revenue $100, Net Income $60.
 
-### Итог
+### Итог реализации
 
 Реализация завершена. Все программные acceptance criteria (AC4, AC7) подтверждены автотестами. AC2/3/5/6 требуют ручной проверки в браузере по сценарию выше. AC1/AC8 — Docker-зависимы, проверяются `docker compose up --build` после установки Docker.
+
+---
+
+## Сессия 2 — 2026-04-26 (диалоги при первом запуске и публикации)
+
+### Диалог 1 — ошибка ModuleNotFoundError при прямом запуске
+
+**Пользователь:**
+> Exception has occurred: ModuleNotFoundError
+> No module named 'app'
+>   File "D:\files\test_project\app\ui\main.py", line 4, in <module>
+>     from app.ui._session import get_conn
+
+**Понимание проблемы:**
+Запустил `app/ui/main.py` через кнопку Run в IDE, а не через `streamlit run`. Python кладёт в `sys.path` только директорию самого скрипта (`app/ui/`), поэтому `app` не находится. При запуске через `streamlit run app/ui/main.py` cwd корня проекта оказывается в `sys.path` автоматически — там всё работает.
+
+**Решение:**
+В начало `main.py` и всех файлов в `app/ui/pages/` добавлен sys.path-bootstrap:
+```python
+import sys
+from pathlib import Path
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]  # parents[3] для pages/
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+```
+
+При запуске через `streamlit run` это no-op (root уже в `sys.path`); при прямом `python file.py` — добавляет root и предотвращает падение. Закоммичено как `fix(ui): add sys.path bootstrap so direct python execution works`.
+
+### Диалог 2 — запрос batch-файла под Windows
+
+**Пользователь:**
+> сделай мне батник запуска чтоб я не писал команду каждый раз
+
+**Понимание:**
+Каждый раз набирать `cd d:\files\test_project && .\.venv\Scripts\streamlit.exe run app\ui\main.py` неудобно. Хотим double-click из Проводника.
+
+**Создан `run.bat`:**
+- `cd /d "%~dp0"` — переходит в папку самого батника (любую, откуда бы его ни запустили).
+- Если `.venv` отсутствует — создаёт его и ставит зависимости.
+- Запускает Streamlit с явным путём `.venv\Scripts\streamlit.exe`, не зависит от того, активирован ли venv в текущей PowerShell-сессии.
+
+### Диалог 3 — путаница с venv другого проекта
+
+**Пользователь (в PowerShell):**
+> PS D:\files> streamlit run
+> Error: Missing argument 'TARGET'.
+> PS D:\files> & d:\files\git\.venv\Scripts\Activate.ps1
+
+**Понимание:**
+1. Запустил `streamlit run` без указания файла — отсюда ошибка `Missing argument 'TARGET'`.
+2. Активировал venv от **другого** проекта (`d:\files\git\.venv`), а не от нашего (`d:\files\test_project\.venv`). Команды бы работали, но из чужой среды.
+
+**Корректные шаги:**
+```powershell
+cd d:\files\test_project
+.\.venv\Scripts\Activate.ps1
+streamlit run app\ui\main.py
+```
+Или одной командой без активации:
+```powershell
+.\.venv\Scripts\streamlit.exe run app\ui\main.py
+```
+
+### Диалог 4 — поведение при чистом клоне с GitHub
+
+**Пользователь:**
+> когда пользователь скачает с гита проект с учетом гитигнора и сбидлит у себя, ничего ли не сломается
+
+**Понимание (что под `.gitignore`):**
+- `.venv/`, `__pycache__/`, `.pytest_cache/` — регенерируются автоматически.
+- `.env` — отсутствует, но дефолты заданы в Dockerfile (`CURRENCY=USD`, `DB_PATH=/app/data/accounting.db`) и в коде через `os.environ.get(..., default)`.
+- `data/*.db` — БД создаётся на первом старте через `init_schema` + `seed_accounts`.
+- `data/.gitkeep` коммитится → папка существует.
+
+**Найдена реальная проблема:**
+В `docker-compose.yml` была строка `env_file: .env`. На чистом клоне `.env` отсутствует — старые версии compose падают `env file not found`. README говорил «cp .env.example .env # optional», но с `env_file:` это НЕ опционально.
+
+**Фикс:** убрал `env_file:` из compose (дефолты в Dockerfile есть), оставил инструкцию как включить для кастомизации. Закоммичено как `fix(docker): drop env_file from compose so fresh clones build without manual setup`.
+
+### Диалог 5 — публикация на GitHub
+
+**Пользователь:**
+> теперь репозиторий, закидывать туда https://github.com/diffary/jito.test_work.git
+
+**Понимание шагов:**
+1. Проверка что remote ещё не настроен (`git remote -v` пусто).
+2. Проверка состояния удалённого репо без добавления его в локальный конфиг (`git ls-remote URL` — пусто, значит репо чистый, force-push не понадобится).
+3. `git remote add origin URL` + `git push -u origin master`.
+
+После пуша — 21 коммит на GitHub, HEAD `f2cb296` совпадает с локальным.
+
+### Диалог 6 — что увидит пользователь после клона
+
+**Пользователь:**
+> если я введу git clone ... cd ... docker compose up --build что я должен увидлеть, типо ехе файл или как
+
+**Понимание:**
+Это веб-приложение, **не desktop-app**. После клона:
+1. Ничего не «устанавливается» в систему — всё в Docker-образе.
+2. После `docker compose up --build` контейнер запускается, печатает `Local URL: http://localhost:8501`.
+3. Открываете в **браузере** — там UI Streamlit с сайдбаром (Documents/Journal/Partners/Reports).
+4. Никаких `.exe` или установщиков нет.
+
+Альтернатива без Docker — `run.bat` (использует Python + venv).
+
+### Диалог 7 — `docker compose build` ≠ `docker compose up`
+
+**Пользователь:**
+> я ввел docker compose build --no-cache, и в итоге Веб-страница по адресу http://0.0.0.0:8501/ временно недоступна
+
+**Понимание двух ошибок:**
+1. **`build` ≠ `up`.** `build` только собирает image; контейнер при этом не стартует. Поэтому 8501 на хосте никто не слушает.
+2. **`0.0.0.0` — не браузерный адрес.** Это bind-адрес «слушать на всех интерфейсах», для браузера нужен `localhost` или `127.0.0.1`.
+
+**Решение:** `docker compose up`, открыть `http://localhost:8501`.
+
+### Диалог 8 — контейнер запущен через GUI, но порт не пробрасывается
+
+**Пользователь:**
+> я вижу что в проге написано STATUS Running (3 minutes ago)
+> ...
+> docker compose ps  →  пусто (только заголовки)
+
+**Понимание:**
+- Docker Desktop показывает статус Running — контейнер реально запущен.
+- Но `docker compose ps` пусто → compose не знает про этот контейнер.
+- Значит контейнер был запущен **не через `docker compose up`**, а через кнопку «Run» в Docker Desktop GUI на образе.
+- Кнопка Run в GUI **не применяет** маппинг портов из `docker-compose.yml`. Поэтому 8501 на хост не выходит.
+
+**Решение:** Stop+Delete контейнер в Docker Desktop → `cd d:\files\test_project` → `docker compose up`.
+
+### Диалог 9 — localhost заработал
+
+**Пользователь:**
+> о, а локалхост сработал
+
+После корректного `docker compose up` маппинг применился, http://localhost:8501 открыло Dashboard.
+
+### Диалог 10 — улучшение UX, печатать localhost вместо 0.0.0.0
+
+**Пользователь:**
+> сделай чтоб при компиляции писало юрл на локалхост и то что щас
+
+**Понимание:**
+В логах Streamlit печатает `URL: http://0.0.0.0:8501` — потому что `--server.address=0.0.0.0` (нужен для bind на всех интерфейсах в контейнере). Но эта же строка идёт как «browser URL» для пользователя, что сбивает с толку.
+
+**Решение:**
+Streamlit имеет отдельный флаг `--browser.serverAddress=localhost`, который меняет ТОЛЬКО строку, отображаемую пользователю, без влияния на bind. Добавлен в `CMD` Dockerfile:
+
+```dockerfile
+CMD ["streamlit", "run", "app/ui/main.py", \
+     "--server.port=8501", "--server.address=0.0.0.0", \
+     "--server.headless=true", "--browser.gatherUsageStats=false", \
+     "--browser.serverAddress=localhost", "--browser.serverPort=8501"]
+```
+
+Теперь при старте: `URL: http://localhost:8501` — кликабельно из терминала.
+
+Закоммичено как `fix(docker): print http://localhost:8501 in startup logs instead of 0.0.0.0`.
+
+### Диалог 11 — мнимый «откат» Dockerfile
+
+**Пользователь:**
+> посмотри докерфал, у меня откатился фикс
+
+**Понимание:**
+Файл на диске содержит фикс, `git log -- Dockerfile` показывает оба коммита (`785970f` и `89c4626`), `git status` чистый, локальная ветка совпадает с origin. То есть фикс на месте.
+
+**Причина мнимого «отката»:** IDE показывает кэшированную версию файла — нужно перезагрузить вкладку в редакторе (`Ctrl+Shift+P → Revert File` в VS Code).
+
+---
+
+## Финальный набор коммитов на master
+
+```
+785970f fix(docker): print http://localhost:8501 in startup logs instead of 0.0.0.0
+f2cb296 fix(docker): drop env_file from compose so fresh clones build without manual setup
+cde4855 docs: finalize prompt history with implementation summary and AC checklist
+89c4626 chore(docker): Dockerfile, compose, README with quickstart
+3a3c633 feat(ui): P&L reports page with breakdown and CSV
+92b2af3 chore: add run.bat for one-click Streamlit launch on Windows
+c80dd5c fix(ui): add sys.path bootstrap so direct python execution works
+ed342d4 feat(ui): documents page with tabs for 4 doc types + reverse
+05bf4e5 feat(ui): partners page with add + balance tables
+2677a1a feat(ui): dashboard + shared _session helper
+7837bf2 feat(formatting): format_money honors CURRENCY env var
+d9cc93f feat(services): partner_balances via arithmetic cancellation
+059fb6f feat(services): pnl_report with date-range, Python aggregation
+b605254 feat(services): list_journal with date/account filters
+a648872 feat(services): reverse_document with mirrored entries
+e32df9d feat(services): post_document with validation and 4 doc types
+3d9f00e feat(services): create_partner with case-insensitive uniqueness
+0264ffa feat(repository): CRUD for partners, documents, journal entries
+d3e1988 feat(models): dataclasses and enums for domain types
+b7b4700 feat(db): schema, Decimal adapters, account seeding
+3bbaeef chore: project scaffolding
+79b80d9 chore: initial commit with spec and plan
+```
+
+23 коммита. Конвенция: `feat / fix / chore / docs(scope): description`.
+
+## Извлечённые уроки
+
+1. **`streamlit run` обязателен.** Прямой `python script.py` не работает без sys.path-патча — добавили его как defensive bootstrap.
+2. **`build` ≠ `up`.** Build только собирает образ, контейнер не стартует. Use `up` (build выполнится, если нужно).
+3. **`0.0.0.0` ≠ `localhost`.** Первое — bind-адрес сервера, второе — клиентский адрес для браузера. Streamlit печатал bind-адрес — переопределили через `--browser.serverAddress`.
+4. **Docker Desktop Run vs `docker compose up`.** GUI-кнопка не применяет compose-конфиг, в т.ч. port mapping. Всегда использовать `docker compose up` для проектов с compose.
+5. **`env_file: .env` без файла → ошибка.** Если `.env` под `.gitignore`, не указывать его в compose как обязательный — лучше держать дефолты в Dockerfile.
+6. **IDE-кэш файлов.** После git-операций редактор может показывать старую версию. `Ctrl+Shift+P → Revert File` или перезагрузка окна.
+7. **Venv бывает чужой.** `& d:\other\venv\Activate.ps1` в той же сессии перетянет PATH — используйте `deactivate` перед активацией нужного, или явные пути типа `.\.venv\Scripts\streamlit.exe`.
+
+## Текущий статус проекта
+
+- **Репозиторий:** https://github.com/diffary/jito.test_work
+- **Ветка:** `master` (можно переименовать в `main` через GitHub Settings)
+- **Тесты:** 56 passing, ~0.3 s
+- **UI страницы:** 5 (Dashboard + 4 функциональных)
+- **Запуск:** `docker compose up --build` или `run.bat` (Windows)
+- **Доступ:** http://localhost:8501
