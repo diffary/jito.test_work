@@ -230,17 +230,18 @@
 
 ### Диалог 1 — ошибка ModuleNotFoundError при прямом запуске
 
-**Пользователь:**
+**Пользователь (вывод IDE):**
 > Exception has occurred: ModuleNotFoundError
 > No module named 'app'
 >   File "D:\files\test_project\app\ui\main.py", line 4, in <module>
 >     from app.ui._session import get_conn
 
 **Понимание проблемы:**
-Запустил `app/ui/main.py` через кнопку Run в IDE, а не через `streamlit run`. Python кладёт в `sys.path` только директорию самого скрипта (`app/ui/`), поэтому `app` не находится. При запуске через `streamlit run app/ui/main.py` cwd корня проекта оказывается в `sys.path` автоматически — там всё работает.
+Запустил `app/ui/main.py` через кнопку Run в IDE, а не через `streamlit run`. Python кладёт в `sys.path` только директорию самого скрипта (`app/ui/`), поэтому пакет `app` не находится. При запуске через `streamlit run app/ui/main.py` cwd корня проекта оказывается в `sys.path` автоматически — там всё работает.
 
 **Решение:**
 В начало `main.py` и всех файлов в `app/ui/pages/` добавлен sys.path-bootstrap:
+
 ```python
 import sys
 from pathlib import Path
@@ -257,7 +258,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 > сделай мне батник запуска чтоб я не писал команду каждый раз
 
 **Понимание:**
-Каждый раз набирать `cd d:\files\test_project && .\.venv\Scripts\streamlit.exe run app\ui\main.py` неудобно. Хотим double-click из Проводника.
+Каждый раз набирать `cd d:\files\test_project && .\.venv\Scripts\streamlit.exe run app\ui\main.py` неудобно. Хочется double-click из Проводника.
 
 **Создан `run.bat`:**
 - `cd /d "%~dp0"` — переходит в папку самого батника (любую, откуда бы его ни запустили).
@@ -276,12 +277,15 @@ if str(_PROJECT_ROOT) not in sys.path:
 2. Активировал venv от **другого** проекта (`d:\files\git\.venv`), а не от нашего (`d:\files\test_project\.venv`). Команды бы работали, но из чужой среды.
 
 **Корректные шаги:**
+
 ```powershell
 cd d:\files\test_project
 .\.venv\Scripts\Activate.ps1
 streamlit run app\ui\main.py
 ```
+
 Или одной командой без активации:
+
 ```powershell
 .\.venv\Scripts\streamlit.exe run app\ui\main.py
 ```
@@ -354,14 +358,7 @@ streamlit run app\ui\main.py
 
 **Решение:** Stop+Delete контейнер в Docker Desktop → `cd d:\files\test_project` → `docker compose up`.
 
-### Диалог 9 — localhost заработал
-
-**Пользователь:**
-> о, а локалхост сработал
-
-После корректного `docker compose up` маппинг применился, http://localhost:8501 открыло Dashboard.
-
-### Диалог 10 — улучшение UX, печатать localhost вместо 0.0.0.0
+### Диалог 9 — улучшение UX, печатать localhost вместо 0.0.0.0
 
 **Пользователь:**
 > сделай чтоб при компиляции писало юрл на локалхост и то что щас
@@ -381,58 +378,124 @@ CMD ["streamlit", "run", "app/ui/main.py", \
 
 Теперь при старте: `URL: http://localhost:8501` — кликабельно из терминала.
 
-Закоммичено как `fix(docker): print http://localhost:8501 in startup logs instead of 0.0.0.0`.
+---
 
-### Диалог 11 — мнимый «откат» Dockerfile
+## Глубже о выбранных альтернативах
 
-**Пользователь:**
-> посмотри докерфал, у меня откатился фикс
+Каждое ключевое решение принималось из 2–4 вариантов. Ниже — почему выбрали именно этот, что отбросили и какой trade-off приняли.
 
-**Понимание:**
-Файл на диске содержит фикс, `git log -- Dockerfile` показывает оба коммита (`785970f` и `89c4626`), `git status` чистый, локальная ветка совпадает с origin. То есть фикс на месте.
+### 1. Модель учёта: accrual + платежи vs только начисление vs кассовый
 
-**Причина мнимого «отката»:** IDE показывает кэшированную версию файла — нужно перезагрузить вкладку в редакторе (`Ctrl+Shift+P → Revert File` в VS Code).
+**Выбран:** accrual + отдельные документы оплат (использует все 5 счетов).
+
+**Почему не «только начисление»** (счёт сразу = доход, без отдельной оплаты):
+- Не было бы платежей → счета 1000 (Cash) и сторона уменьшения AR/AP не использовались бы. План счетов на 5 строк, но рабочих было бы 4.
+- Балансы партнёров никогда не уменьшались бы со временем — только сторно. Демо потеряло бы динамику.
+
+**Почему не кассовый** (счёт = сразу деньги в кассе):
+- AR (1100) и AP (2000) не использовались бы вообще → 3 рабочих счёта из 5.
+- Не было бы разрыва «выставили счёт → деньги пришли потом», а это и есть вся суть двойной записи vs простой кассовой книги.
+
+**Trade-off accrual+payments:** больше типов документов (4 вместо 2), больше валидаций, более длинные сценарии тестирования. Выгода — все 5 счетов работают, балансы партнёров живые, P&L отражает реальное «начислено», а не «получено».
+
+### 2. Иммутабельность журнала vs CRUD vs delete-only
+
+**Выбран:** иммутабельные документы и проводки, корректировка только через сторно.
+
+**Почему не CRUD:**
+- Это было бы UI поверх БД, а не «бухгалтерская логика». Учётный смысл проводки в её неизменяемости — это инвариант, на котором держится аудит и доверие к отчётам прошлых периодов.
+- Возможность редактировать прошлые проводки означает, что отчёт за май, выпущенный 1 июня, может стать другим 15 июня — это unacceptable для любой реальной системы учёта.
+
+**Почему не delete-only** (нельзя править, но можно удалить):
+- Удаление = «как будто не было». Сторно = «было, но мы это отменили». Разница принципиальная: первое скрывает историю, второе её сохраняет.
+
+**Trade-off:** добавились 2 поля в схему (`status`, `reverses_id`), отдельный API `reverse_document`, специальная семантика P&L (без status-фильтра). Выгода — отчёты прошлых периодов остаются стабильными, в журнале видна вся история.
+
+### 3. P&L без status-фильтра — почему это правильно
+
+**Альтернатива (плохая):** фильтровать `status='POSTED'` в P&L.
+
+**Что было бы плохого:**
+- Сторно проведённое в более позднем периоде помечает оригинал как REVERSED.
+- Если P&L фильтрует по `status='POSTED'`, оригинал из мая, проведённый и закрытый, **исчезает** из майского отчёта в момент сторно в июне.
+- То есть ранее «закрытый» май становится другим — нарушение принципа стабильности отчётов.
+
+**Что выбрали:** P&L использует все проводки в диапазоне дат, без фильтра по статусу. Сторно отображается в том периоде, в котором оно проведено (его `doc_date` всегда = сегодня). Арифметика «оригинал-Cr 4000 + сторно-Dr 4000» сама даёт ноль, если оба попадают в один период.
+
+### 4. Без позиций (line items) — YAGNI победил
+
+**Альтернатива:** документ с N строками (товар × количество × цена), сумма автоматически.
+
+**Почему отбросили:**
+- Двойная запись и журнал одинаково наглядны на одной сумме «всего». Образовательная ценность демо не страдает.
+- Позиции потянули бы за собой: справочник товаров, единицы измерения, потенциально склад, скидки/налоги по строке.
+- Это превратило бы 56-тестовый демо-проект в полноценную ERP-систему. Нет.
+
+**Trade-off:** если понадобится — позиции добавляются без изменения проводок. Просто `documents` остаётся как есть, появляется `document_lines`, сумма документа = SUM(qty × price).
+
+### 5. Без мультивалютности — отдельное пространство сложности
+
+**Альтернатива:** `documents.currency`, таблица курсов на каждый день, переоценка балансов.
+
+**Почему отбросили:**
+- Мультивалютность тянет: справочник валют, курсы по датам, реализованные/нереализованные курсовые разницы, переоценка AR/AP на дату отчёта, P&L в валюте отчётности vs валюте операции.
+- Это удвоит-утроит объём кода и тестов. Никакой образовательной ценности **для двойной записи** это не добавляет — наоборот, размывает.
+
+**Trade-off:** в коде нет колонки `currency`, формат отображения берётся из env `CURRENCY`. Если понадобится — это полноценный отдельный проект.
+
+### 6. Streamlit vs FastAPI+React vs Flask+Jinja
+
+**Выбран:** Streamlit (по требованиям пользователя).
+
+**Trade-offs Streamlit (которые пришлось обходить):**
+- **Перерисовка всего скрипта** на каждое взаимодействие → нельзя кэшировать данные через `@st.cache_data` для мутабельных запросов (балансы устареют после Post). Только `@st.cache_resource` для соединения с БД.
+- **Многопоточность** в Streamlit — script run на отдельном потоке, поэтому `sqlite3.Connection` открыт с `check_same_thread=False`. Для предотвращения race condition между параллельными rerun добавлен `threading.Lock` в `services.py` вокруг записывающих операций.
+- **Multipage discovery** через файлы `app/ui/pages/*.py` — простая и работает, но имена файлов диктуют порядок в сайдбаре (`1_`, `2_`, `3_`, `4_`).
+- **Нет нормального CSS-стилинга** на уровне ячеек таблицы → подсветку сторно сделали через unicode-маркеры (`↶`, `✗`) в колонке Doc#, а не через цвета.
+
+**Почему не FastAPI+React:** двукратное увеличение объёма (бэкенд + фронтенд + сборка). Время разработки x3.
+
+**Почему не Flask+Jinja:** меньше «магии» Streamlit, но требует больше boilerplate (формы, валидация, шаблоны, маршруты).
+
+### 7. Слоистая архитектура vs монолит vs SQLAlchemy
+
+**Выбран:** db / models / repository / services / ui — 5 модулей, ~250 строк сервисов.
+
+**Почему не монолит** (всё в `app.py`):
+- Вся бизнес-логика смешалась бы со Streamlit-вызовами → невозможно протестировать `post_document` без запуска Streamlit.
+- Тесты — главная страховка корректности двойной записи.
+
+**Почему не SQLAlchemy ORM:**
+- 4 таблицы. SQLAlchemy дал бы Decorator-magic, миграции через Alembic, lazy loading — всё это излишне для 4 таблиц без джоинов сложнее `JOIN ON id`.
+- Pure SQL в `repository.py` — 200 строк, понятен любому, кто знает SQL.
+
+**Trade-off:** при росте схемы (10+ таблиц, FK-цепочки длиной 3+) ORM начал бы окупаться. Сейчас YAGNI.
+
+### 8. Threading.Lock vs WAL vs single-threaded queue
+
+**Выбран:** module-level `threading.Lock` в `services.py` вокруг `post_document` и `reverse_document`.
+
+**Почему не WAL** (Write-Ahead Logging в SQLite):
+- WAL разрешает множественные читающие транзакции параллельно с одной пишущей. Полезно для read-heavy сценариев. У нас демо на 1 пользователя — оверкилл.
+
+**Почему не single-threaded queue:**
+- Перенаправлять все записи в очередь = добавлять воркер-поток, async-API, ждать результата → сильно усложняет код ради проблемы которой нет в single-user demo.
+
+**Trade-off:** `Lock` сериализует ВСЕ записи. На 1 юзере не имеет значения. На 100 параллельных стало бы узким местом — но к тому моменту проект уже не SQLite + Streamlit demo.
 
 ---
 
-## Финальный набор коммитов на master
+## Что бы сделал по-другому при второй итерации
 
-```
-785970f fix(docker): print http://localhost:8501 in startup logs instead of 0.0.0.0
-f2cb296 fix(docker): drop env_file from compose so fresh clones build without manual setup
-cde4855 docs: finalize prompt history with implementation summary and AC checklist
-89c4626 chore(docker): Dockerfile, compose, README with quickstart
-3a3c633 feat(ui): P&L reports page with breakdown and CSV
-92b2af3 chore: add run.bat for one-click Streamlit launch on Windows
-c80dd5c fix(ui): add sys.path bootstrap so direct python execution works
-ed342d4 feat(ui): documents page with tabs for 4 doc types + reverse
-05bf4e5 feat(ui): partners page with add + balance tables
-2677a1a feat(ui): dashboard + shared _session helper
-7837bf2 feat(formatting): format_money honors CURRENCY env var
-d9cc93f feat(services): partner_balances via arithmetic cancellation
-059fb6f feat(services): pnl_report with date-range, Python aggregation
-b605254 feat(services): list_journal with date/account filters
-a648872 feat(services): reverse_document with mirrored entries
-e32df9d feat(services): post_document with validation and 4 doc types
-3d9f00e feat(services): create_partner with case-insensitive uniqueness
-0264ffa feat(repository): CRUD for partners, documents, journal entries
-d3e1988 feat(models): dataclasses and enums for domain types
-b7b4700 feat(db): schema, Decimal adapters, account seeding
-3bbaeef chore: project scaffolding
-79b80d9 chore: initial commit with spec and plan
-```
+1. **Сделал бы ветку `main`, а не `master`** — GitHub default с 2020 года.
+2. **Добавил бы CI** (`pytest` на каждый push) сразу — ловит регрессии до того, как они доходят до пользователя.
+3. **`.editorconfig`** — закрепил бы LF line-endings и UTF-8, чтобы убрать git-warning'и про CRLF на Windows.
+4. **`pyproject.toml`** вместо `requirements.txt` — стандартизированный способ объявления зависимостей и метаданных проекта.
+5. **Отдельный `Makefile` / `tasks.py`** для команд `test`, `run`, `build`, `clean` — единый интерфейс на всех платформах.
+6. **Логирование** через `logging` — сейчас демо без логов вообще; для продовой версии нужны хотя бы INFO-логи на post/reverse + ERROR-логи на падения.
+7. **Healthcheck-страница в UI** — отдельная страница с диагностикой (БД доступна? миграции применены? партнёров N? балансы балансят?). Полезно для оператора демо.
 
-23 коммита. Конвенция: `feat / fix / chore / docs(scope): description`.
-
-## Извлечённые уроки
-
-1. **`streamlit run` обязателен.** Прямой `python script.py` не работает без sys.path-патча — добавили его как defensive bootstrap.
-2. **`build` ≠ `up`.** Build только собирает образ, контейнер не стартует. Use `up` (build выполнится, если нужно).
-3. **`0.0.0.0` ≠ `localhost`.** Первое — bind-адрес сервера, второе — клиентский адрес для браузера. Streamlit печатал bind-адрес — переопределили через `--browser.serverAddress`.
-4. **Docker Desktop Run vs `docker compose up`.** GUI-кнопка не применяет compose-конфиг, в т.ч. port mapping. Всегда использовать `docker compose up` для проектов с compose.
-5. **`env_file: .env` без файла → ошибка.** Если `.env` под `.gitignore`, не указывать его в compose как обязательный — лучше держать дефолты в Dockerfile.
-6. **IDE-кэш файлов.** После git-операций редактор может показывать старую версию. `Ctrl+Shift+P → Revert File` или перезагрузка окна.
-7. **Venv бывает чужой.** `& d:\other\venv\Activate.ps1` в той же сессии перетянет PATH — используйте `deactivate` перед активацией нужного, или явные пути типа `.\.venv\Scripts\streamlit.exe`.
+Эти улучшения не были в spec — добавил бы при втором проходе или если бы проект жил дольше.
 
 ## Текущий статус проекта
 
